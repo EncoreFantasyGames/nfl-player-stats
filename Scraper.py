@@ -53,7 +53,7 @@ class Scraper:
         self.player_gamelog_url = player_gamelog_url
         self.sport = sport
 
-        self.db = Database(db_name='encorefan', user='root', password='Ruben-5AW')
+        self.db = Database(db_name='test', user='saruben', password='Win$ton128', host='54.203.105.237')
         if num_jobs > 1:
             self.multiprocessing = True
             self.worker_pool = Pool(num_jobs)
@@ -68,60 +68,64 @@ class Scraper:
         """Pool workers to scrape players by first letter of last name"""
         if self.clear_old_data:
             self.clear_data()
+        print("scraping beginning")
         player_id = self.first_player_id
+        success_players, fail_players, total_players = 0, 0, 0
         for letter in self.letters_to_scrape:
-            player_profile_urls = self.get_players_for_letter(letter)
-            for player_profile_url in player_profile_urls:
 
+            player_profile_urls = self.get_players_for_letter(letter)
+            print("'{}' Players:".format(letter))
+            i, all = 1, len(player_profile_urls)
+            for player_profile_url in player_profile_urls:
+                print("\t scraping player: {}/{}".format(i, all), '\r')
                 player = self.create_player_model(player_id, player_profile_url)
                 try:
+                    # scrape
                     player.scrape_profile()
                     player.scrape_player_stats()
-                except (KeyboardInterrupt, SystemExit):
-                    raise
+                    player.consolidate()
+
+
+                    if len(player.game_stats) >= 32:  # store
+                        try:
+                            added_player_id = self.save_player_profile(player.profile)
+                            self.save_player_game_stats(player.game_stats, added_player_id)
+                            success_players += 1
+
+                        except (KeyboardInterrupt, SystemExit):
+                            raise
+                        except Exception as err:
+                            print('There was a problem saving stats for {} with error: {}'.format(player_profile_url, err))
+                            fail_players += 1
+                            with open("logs/errored_players.txt", "a") as fp:
+                                fp.write("{0}\n".format(player_profile_url))
+                        player_id += 1
+
                 except Exception as err:
-                    print('There was a problem parsing stats for {} with error: {}'.format(player_profile_url, err))
-                    continue
-                self.save_player_profile(player.profile)
-                self.save_player_game_stats(player.game_stats, player.player_id, player.profile['name'])
-                player_id += 1
-        #self.condense_data()
+                    if len(player.game_stats) >= 32:
+                        fail_players += 1
 
-    def condense_data(self):
-        """Condense data into two files, a profile file and a stats file"""
-        print('Condensing Data...')
-        condensed_profile_data = []
-        all_profile_files = glob.glob('{}/*.json'.format(self.profile_dir))
-        for file in all_profile_files:
-            with open(file, 'rb') as fin:
-                condensed_profile_data.append(json.load(fin))
-        print('{} player profiles condensed'.format(len(condensed_profile_data)))
-        filename = 'profiles_{}.json'.format(time.time())
-        with open(filename, 'w') as fout:
-            json.dump(condensed_profile_data, fout)
+                        print("scraping error: {}".format(len(player.game_stats)), err)
+                        with open("logs/errored_players.txt", "a") as fp:
+                            fp.write("{0}\n".format(player_profile_url))
 
-        condensed_game_data = []
-        all_game_files = glob.glob('{}/*.json'.format(self.stats_dir))
-        for file in all_game_files:
-            with open(file, 'rb') as fin:
-                condensed_game_data += json.load(fin)
-        print('{} player seasons condensed'.format(len(condensed_game_data)))
-        filename = 'games_{}.json'.format(time.time())
-        with open(filename, 'w') as fout:
-            json.dump(condensed_game_data, fout)
+                i += 1
+
+        self.db.close()
+        return [success_players, fail_players, total_players]
 
     def save_player_profile(self, profile):
         """
         Save a Player into table
         """
-        self.db.insert_player(profile)
-        
+        return self.db.save_player_profile(profile)
 
-    def save_player_game_stats(self, games, player_id, player_name):
+    def save_player_game_stats(self, games, player_id):
         """
         Save a list of player games with stats info
         """
-        self.db.insert_game(games, player_id, player_name)
+        if player_id is not None:
+            return self.db.insert_game(games, player_id)
 
     def get_players_for_letter(self, letter):
         """
@@ -131,8 +135,7 @@ class Scraper:
         soup = BeautifulSoup(response.content, 'html.parser')
 
         players = soup.find('div', {'id': 'div_players'}).find_all('a')
-        return [self.base_url.format(players[0]['href'])]
-        # return [self.base_url.format(player['href']) for player in players]
+        return [self.base_url.format(player['href']) for player in players]
 
     def get_page(self, url, retry_count=0):
         """

@@ -117,7 +117,7 @@ class NFLPlayer(Player):
 
         profile_section = soup.find('div', {'id': 'meta'})
         self.profile['name'] = profile_section.find('h1', {'itemprop': 'name'}).contents[1].contents[0]
-        print('scraping {}'.format(self.profile['name']))
+        self.profile['first_name'], self.profile['last_name'] = self.profile['name'].split(' ')
 
         profile_attributes = profile_section.find_all('p')
         current_attribute = 1
@@ -158,7 +158,7 @@ class NFLPlayer(Player):
             current_attribute += 1
 
         if profile_attributes[current_attribute].contents[0].contents[0] == 'College':
-            self.profile['college'] = profile_attributes[current_attribute].contents[2].contents[0]
+            self.profile['college'] = str(profile_attributes[current_attribute].contents[2].contents[0])
             current_attribute += 1
 
         # Skip weighted career AV
@@ -172,7 +172,7 @@ class NFLPlayer(Player):
 
         if ((current_attribute + 1) <= num_attributes) and profile_attributes[current_attribute].contents[0].contents[
             0] == 'Draft':
-            self.profile['draft_team'] = profile_attributes[current_attribute].contents[2].contents[0]
+            self.profile['draft_team'] = str(profile_attributes[current_attribute].contents[2].contents[0])
             draft_info = profile_attributes[current_attribute].contents[3].split(' ')
             self.profile['draft_round'] = re.findall(r'\d+', draft_info[3])[0]
             self.profile['draft_position'] = re.findall(r'\d+', draft_info[5])[0]
@@ -191,6 +191,9 @@ class NFLPlayer(Player):
             self.profile['hof_induction_year'] = profile_attributes[current_attribute].contents[2].contents[0]
             current_attribute += 1
 
+        self.profile['birth_city'], self.profile['birth_state'] = self.profile['birth_place'].split(', ')
+        feet, inches = self.profile['height'].split('-')
+        self.profile['height'] = int(feet)*12 + int(inches)
         self.seasons_with_stats = self.get_seasons_with_stats(soup)
 
     def get_seasons_with_stats(self, profile_soup):
@@ -214,10 +217,11 @@ class NFLPlayer(Player):
 
     def scrape_player_stats(self):
         """Scrape the stats for all available games for a player"""
-        for season in self.seasons_with_stats:
-            if season['year'] == 'Career' or season['year'] == 'Postseason' or season['year'] == 'Player Game Finder':
-                continue
-            self.scrape_season_gamelog(season['gamelog_url'], season['year'])
+        if len(self.seasons_with_stats) > 0:
+            for season in self.seasons_with_stats:
+                if season['year'] == 'Career' or season['year'] == 'Postseason' or season['year'] == 'Player Game Finder':
+                    continue
+                self.scrape_season_gamelog(season['gamelog_url'], season['year'])
 
     def scrape_season_gamelog(self, gamelog_url, year):
         """
@@ -234,27 +238,27 @@ class NFLPlayer(Player):
             games += playoff_table.find('tbody').find_all('tr')
 
         for game in games:
-            stats = self.make_player_game_stats(self.player_id, year)
+            stats = self.make_player_game_stats(self.player_id, int(year))
 
             missing_reason = game.find('td', {'data-stat': 'reason'})
             if missing_reason is None:
-                stats['game_id'] = game.find('td', {'data-stat': 'game_date'}).find('a', href=True)['href'].replace('/boxscores/', '').replace('.htm', '')
-                stats['date'] = game.find('td', {'data-stat': 'game_date'}).contents[0].contents[0]
-                stats['game_number'] = game.find('td', {'data-stat': 'game_num'}).contents[0]
+                stats['game_id'] = str(game.find('td', {'data-stat': 'game_date'}).find('a', href=True)['href'].replace('/boxscores/', '').replace('.htm', ''))
+                stats['date'] = str(game.find('td', {'data-stat': 'game_date'}).contents[0].contents[0])
+                stats['game_number'] = int(game.find('td', {'data-stat': 'game_num'}).contents[0])
                 if game.find('td', {'data-stat': 'age'}) is not None:
-                    stats['age'] = game.find('td', {'data-stat': 'age'}).contents[0]
-                stats['team'] = game.find('td', {'data-stat': 'team'}).contents[0].contents[0]
+                    stats['age'] = float(game.find('td', {'data-stat': 'age'}).contents[0])
+                stats['team'] = str(game.find('td', {'data-stat': 'team'}).contents[0].contents[0])
                 if game.find('td', {'data-stat': 'game_location'}).contents == ['@']:
                     stats['game_location'] = 'A'
                 elif game.find('td', {'data-stat': 'game_location'}).contents == ['N']:
                     stats['game_location'] = 'N'
                 else:
                     stats['game_location'] = 'H'
-                stats['opponent'] = game.find('td', {'data-stat': 'opp'}).contents[0].contents[0]
+                stats['opponent'] = str(game.find('td', {'data-stat': 'opp'}).contents[0].contents[0])
                 result = game.find('td', {'data-stat': 'game_result'}).contents[0].contents[0]
                 stats['game_won'] = (result.split(' ')[0] == 'W')
-                stats['player_team_score'] = result.split(' ')[1].split('-')[0]
-                stats['opponent_score'] = result.split(' ')[1].split('-')[1]
+                stats['player_team_score'] = str(result.split(' ')[1].split('-')[0])
+                stats['opponent_score'] = str(result.split(' ')[1].split('-')[1])
 
                 # Collect passing stats
                 pass_attempts = game.find('td', {'data-stat': 'pass_cmp'})
@@ -400,4 +404,11 @@ class NFLPlayer(Player):
                 if punting_blocked is not None and len(punting_blocked) > 0:
                     stats['punting_blocked'] = int(punting_blocked.contents[0])
 
-            self.game_stats.append(stats)
+                self.game_stats.append(stats)
+
+    def consolidate(self):
+        self.profile['is_historic'] = self.game_stats[-1]['year'] != str(2021)
+        self.profile['rookie_year'] = int(self.game_stats[0]['year'])
+        final_game_year = int(self.game_stats[-1]['year'])
+        self.profile['experience'] = final_game_year - self.profile['rookie_year']
+        self.profile['status'] = 'retired' if self.profile['is_historic'] else 'active'
