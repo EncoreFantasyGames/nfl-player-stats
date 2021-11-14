@@ -53,7 +53,7 @@ class Scraper:
         self.player_gamelog_url = player_gamelog_url
         self.sport = sport
 
-        self.db = Database(db_name='test', user='saruben', password='Win$ton128', host='54.203.105.237')
+        self.db = Database()
         if num_jobs > 1:
             self.multiprocessing = True
             self.worker_pool = Pool(num_jobs)
